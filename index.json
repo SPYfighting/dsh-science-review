@@ -1,0 +1,39 @@
+{
+  "format": 1,
+  "title": {
+    "zh": "DSH 回答审查",
+    "en": "DSH Science Review"
+  },
+  "plugins": [
+    {
+      "name": "dsh-science-review",
+      "title": {
+        "zh": "回答审查",
+        "en": "DSH Science Review"
+      },
+      "description": {
+        "zh": "核对 DeepSeek Harness 会话回答与执行记录的独立审查插件",
+        "en": "Review answers against the task, tool results and delivered files."
+      },
+      "author": "SPYfighting",
+      "homepage": "https://github.com/SPYfighting/dsh-science-review",
+      "repository": {
+        "url": "https://github.com/SPYfighting/dsh-science-review"
+      },
+      "versions": [
+        {
+          "version": "0.3.0",
+          "publishTimestamp": 1795614700,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/SPYfighting/dsh-science-review",
+            "commit": "9b432c4cd03dc46a8e5c8fddb389fad541e42383"
+          },
+          "engines": {
+            "dsh": "0.2.2-rc.5"
+          }
+        }
+      ]
+    }
+  ]
+}
