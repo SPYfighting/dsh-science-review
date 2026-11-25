@@ -2,17 +2,34 @@
 
 在 DeepSeek Harness 的回答下方显示独立审查报告。审查员把回答中的主张与用户任务、工具执行记录和交付证据逐项对照。发现会同时列出回答原文、证据原文、来源、理由和修正建议。适用于 DSH Web，已适配 `0.2.2-rc.5`。
 
-## 开始使用
+## 安装
 
-在已安装 DeepSeek Harness `0.2.2-rc.5` 的环境中运行，然后重新启动 DSH Web：
+### 从 DSH 插件页安装（推荐）
+
+1. 在 DSH Desktop 或 Web 打开侧栏 **插件 → 添加插件**。
+2. 输入 `dsh-science-review@0.3.0`，确认来源是 npm，点击 **安装**，完成后选择 **立即启用**。桌面版通过这个入口安装到当前桌面环境。
+3. 打开 **设置 → 回答审查**，看到模型选择和核查预设即表示插件已加载。
+
+本版支持的宿主版本是 `0.2.2-rc.5`。插件包内含编译好的网页界面。[DSH 官方插件管理说明](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/client/ui-plugin-manager/README.zh.md)
+
+### 从命令行安装（DSH Web）
+
+在启动 Web 的同一套 DSH 环境中运行以下命令，再重新启动 Web。使用自定义 profile（保存插件和设置的独立环境）时，把 `web` 换成实际名称。
 
 ```sh
 dsh plugin --profile web add dsh-science-review@0.3.0
 ```
 
-也可从 [GitHub Release](https://github.com/SPYfighting/dsh-science-review/releases/tag/v0.3.0) 下载同版 `.tgz`，把上面命令的包名替换为下载文件的绝对路径。
+### 从 GitHub 安装包或索引安装
 
-在 DSH 的插件发现页，打开索引源管理，添加本项目的 [插件索引](https://raw.githubusercontent.com/SPYfighting/dsh-science-review/main/index.json)，即可在界面中查找并安装。
+- **安装包文件**。从 [GitHub Release](https://github.com/SPYfighting/dsh-science-review/releases/tag/v0.3.0) 下载 `dsh-science-review-0.3.0.tgz`。在文件所在目录运行 `dsh plugin --profile web add ./dsh-science-review-0.3.0.tgz`，然后重启 Web。
+- **插件发现页**。在 **插件 → 实验性插件** 启用 **自定义插件索引**，打开 **发现 → 管理索引源 → 添加索引源**，粘贴下面的地址。搜索“回答审查”，核对版本后安装。[DSH 官方索引说明](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/docs/user/guide/plugin-market.zh.md)
+
+```text
+https://raw.githubusercontent.com/SPYfighting/dsh-science-review/main/index.json
+```
+
+## 开始使用
 
 打开 **设置 → 回答审查**，选择审查模型及推理强度（effort）。模型来自 DSH 已配置的提供方，密钥由 DSH 管理。默认跟随目标回答所用的模型和强度。选定其他模型时，可以选它公布的强度或采用该模型默认值。
 
@@ -57,7 +74,7 @@ dsh plugin --profile web add dsh-science-review@0.3.0
 
 两例合计，高效用量低 64.3%。两种预设都发现了样本量和显著性错误。全面还标出了通知中的助手套话，并单列越权发送。高效也通过执行记录发现了发送问题，模型对相邻核查项的归类可能重叠。这个比例取决于输入和模型输出，不能作为固定折扣。[含开发期失败、重试和最终用量的实测记录](https://github.com/SPYfighting/dsh-science-review/blob/main/test/results/核查预设用量对照-2026-11-25.json)
 
-## 安装与测试
+## 本地开发与测试
 
 项目测试环境使用 Node.js 24.9 或以上版本。DSH 的插件安装命令还需要可用的 pnpm。在此项目目录执行以下命令，可安装并启动一个独立的 Web 配置。
 
