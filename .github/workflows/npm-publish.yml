@@ -1,0 +1,66 @@
+name: Publish npm release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version from an existing GitHub Release (e.g. 0.3.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    env:
+      PACKAGE: dsh-science-review
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 26.13.1
+          package-manager-cache: false
+
+      - name: Verify the released tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          asset="$PACKAGE-$VERSION.tgz"
+          gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,isPrerelease > release.json
+          digest=$(jq -er --arg name "$asset" '
+            select(.isDraft == false and .isPrerelease == false)
+            | [.assets[] | select(.name == $name and .state == "uploaded")]
+            | select(length == 1) | .[0].digest | capture("^sha256:(?<hash>[a-f0-9]{64})$").hash
+          ' release.json)
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$asset"
+          printf '%s  %s\n' "$digest" "$asset" | sha256sum --check
+          tar -xzOf "$asset" package/package.json | jq -e --arg name "$PACKAGE" --arg version "$VERSION" \
+            '.name == $name and .version == $version'
+
+      - name: Publish the verified tarball with npm trusted publishing
+        env:
+          NPM_CONFIG_REGISTRY: https://registry.npmjs.org/
+        run: |
+          set -euo pipefail
+          asset="$PACKAGE-$VERSION.tgz"
+          url="https://registry.npmjs.org/$PACKAGE/$VERSION"
+          expected="sha512-$(openssl dgst -sha512 -binary "$asset" | openssl base64 -A)"
+          status=$(curl --silent --show-error --retry 3 --output registry.json --write-out '%{http_code}' "$url")
+          case "$status" in
+            200) echo "Checking the integrity of the existing version" ;;
+            404)
+              npm publish "./$asset" --access public --tag latest --ignore-scripts
+              curl --fail --silent --show-error --retry 5 --retry-all-errors "$url" --output registry.json
+              ;;
+            *) echo "npm registry returned HTTP $status" >&2; exit 1 ;;
+          esac
+          jq -e --arg integrity "$expected" '.dist.integrity == $integrity' registry.json
