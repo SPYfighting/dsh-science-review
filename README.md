@@ -1,28 +1,28 @@
 # DSH Science Review · 回答审查
 
-在 DeepSeek Harness 的回答下方显示独立审查报告。审查员把回答中的主张与用户任务、工具执行记录和交付证据逐项对照。发现会同时列出回答原文、证据原文、来源、理由和修正建议。适用于 DSH Web，已适配 `0.2.2-rc.5`。
+在 DeepSeek Harness 的回答下方显示独立审查报告。审查员把回答中的主张与用户任务、工具执行记录和交付证据逐项对照。发现会同时列出回答原文、证据原文、来源、理由和修正建议。适用于 DSH Web，已适配 `0.2.2-rc.5` 和 `0.2.3-alpha.2`。
 
 ## 安装
 
 ### 从 DSH 插件页安装（推荐）
 
 1. 在 DSH Desktop 或 Web 打开侧栏 **插件 → 添加插件**。
-2. 输入 `dsh-science-review@0.3.0`，确认来源是 npm，点击 **安装**，完成后选择 **立即启用**。桌面版通过这个入口安装到当前桌面环境。
+2. 输入 `dsh-science-review@0.3.1`，确认来源是 npm，点击 **安装**，完成后选择 **立即启用**。桌面版通过这个入口安装到当前桌面环境。
 3. 打开 **设置 → 回答审查**，看到模型选择和核查预设即表示插件已加载。
 
-本版支持的宿主版本是 `0.2.2-rc.5`。插件包内含编译好的网页界面。[DSH 官方插件管理说明](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/client/ui-plugin-manager/README.zh.md)
+0.3.1 已在 DSH 0.2.2-rc.5 和 0.2.3-alpha.2 的独立 Web 配置中安装验证，覆盖手动和逐轮审查、反馈、重启恢复及从 0.3.0 升级。插件包内含编译好的网页界面。[DSH 官方插件管理说明](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/client/ui-plugin-manager/README.zh.md)
 
 ### 从命令行安装（DSH Web）
 
 在启动 Web 的同一套 DSH 环境中运行以下命令，再重新启动 Web。使用自定义 profile（保存插件和设置的独立环境）时，把 `web` 换成实际名称。
 
 ```sh
-dsh plugin --profile web add dsh-science-review@0.3.0
+dsh plugin --profile web add dsh-science-review@0.3.1
 ```
 
 ### 从 GitHub 安装包或索引安装
 
-- **安装包文件**。从 [GitHub Release](https://github.com/SPYfighting/dsh-science-review/releases/tag/v0.3.0) 下载 `dsh-science-review-0.3.0.tgz`。在文件所在目录运行 `dsh plugin --profile web add ./dsh-science-review-0.3.0.tgz`，然后重启 Web。
+- **安装包文件**。从 [GitHub Release](https://github.com/SPYfighting/dsh-science-review/releases/tag/v0.3.1) 下载 `dsh-science-review-0.3.1.tgz`。在文件所在目录运行 `dsh plugin --profile web add ./dsh-science-review-0.3.1.tgz`，然后重启 Web。
 - **插件发现页**。在 **插件 → 实验性插件** 启用 **自定义插件索引**，打开 **发现 → 管理索引源 → 添加索引源**，粘贴下面的地址。搜索“回答审查”，核对版本后安装。[DSH 官方索引说明](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/docs/user/guide/plugin-market.zh.md)
 
 ```text
@@ -91,7 +91,7 @@ npm run dsh -- web
 
 ```sh
 npm pack
-dsh plugin --profile web add "$PWD/dsh-science-review-0.3.0.tgz"
+dsh plugin --profile web add "$PWD/dsh-science-review-0.3.1.tgz"
 ```
 
 单元测试和真实宿主集成测试可分别运行。后者将插件安装到临时 DSH 配置，使用本机模拟模型制造样本量矛盾，验证手动请求、自动触发、原文定位、下一轮反馈和重启恢复，无需模型密钥。
@@ -123,8 +123,8 @@ node test/live-account.mjs --live --case=research,notice --presets=efficient,ful
 
 对论文、图像和计算结果的结论取决于现有证据。联网解析 DOI、重新运行分析，以及长任务执行中的定时检查点，目前均在实现范围之外。自动审查在主会话的一轮回答完成时触发。
 
-审查会把所选证据发给设置中指定的模型提供方。报告保存在原会话历史内，沿用该历史的分享及日志上传设置。若开启 LiveShare，共享会话历史的获准访问者也可能读取报告。
+审查会把所选证据发给设置中指定的模型提供方。从 0.3.1 起，新报告与会话审查模式保存在 `$DSH_HOME/dsh-science-review/reviews.sqlite`。升级后可以直接查看旧会话里的报告，已反馈的发现保留原状态。备份时请同时保留 DSH 会话和此数据库。旧报告以及发回主助手的审查意见仍随原会话历史分享。
 
 **与 Claude Science 的对应关系。** 官方 Reviewer 会独立读取近期回答、批准的计划、产物和执行记录，在回答后及长任务检查点运行，也支持手动请求、消息下的发现卡片、自定义标准和主助手后续纠正。这里采用 DSH 的原生会话事件、模型目录和 Web 扩展接口实现相应交互。关键轮次筛选、段落覆盖和结构化报告校验是本插件的实现选择。[Anthropic Reviewer 文档](https://claude.com/docs/claude-science/the-reviewer)
 
-**与其他 DSH 插件共存。** DSH 实验性 Auto review 评估待执行工具的权限。本插件使用独立的设置项、会话记录及界面入口。旧科研工作台的自动审查由 `DSH_SCIENCE_AUTO_REVIEW=1` 启用；若同时开启两套回答自动审查，同一轮可能产生两份报告。这里借鉴了旧工作台按轮核对数字、执行记录、图文及引用的思路。当前版本固定已验证的宿主版本，因为 DSH 将可忽略的插件会话记录接口标记为实验性。[DSH Auto review](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/experimental/auto-review/README.md) · [DSH 会话记录接口](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/core/session/src/index.ts#L479-L513) · [原科研工作台](https://github.com/SPYfighting/dsh-science-plugin/blob/cd38feebf9f86075e85f980a3e9e1ad2083cf5be/lib/reviewer.js)
+**与其他 DSH 插件共存。** DSH 实验性 Auto review 评估待执行工具的权限。本插件使用独立的设置项、会话记录及界面入口。旧科研工作台的自动审查由 `DSH_SCIENCE_AUTO_REVIEW=1` 启用；若同时开启两套回答自动审查，同一轮可能产生两份报告。这里借鉴了旧工作台按轮核对数字、执行记录、图文及引用的思路。[DSH Auto review](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/experimental/auto-review/README.md) · [DSH 会话记录接口](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.5/packages/core/session/src/index.ts#L479-L513) · [原科研工作台](https://github.com/SPYfighting/dsh-science-plugin/blob/cd38feebf9f86075e85f980a3e9e1ad2083cf5be/lib/reviewer.js)

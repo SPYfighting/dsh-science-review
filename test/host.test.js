@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { setImmediate as tick } from 'node:timers/promises'
-import { Session, appendPluginRecord } from '@deepseek-ai/dsh-session'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { openReviewStore } from '../lib/review-store.js'
+import { Session } from '@deepseek-ai/dsh-session'
 import { projection, createRunner, withFeedback, registerRoutes, readTurn } from '../lib/index.js'
 import { defaults, configuration, catalog, efforts, saveSettings } from '../lib/settings.js'
 
@@ -22,11 +26,12 @@ function fixture(mode = 'manual') {
     logger: { warn: message => { throw new Error(message) } },
   }
   const settings = { ...defaults, mode }
-  const state = () => fold(events.concat(session.snapshotEvents().map(e => ({ ...e, seq: e.seq + events.length }))))
+  const store = openReviewStore(':memory:')
+  const state = () => store.state(session.id, fold(events))
   let count = 0
-  const runner = createRunner(ctx, settings, state, async () => { count++; return result },
+  const runner = createRunner(ctx, settings, state, store, async () => { count++; return result },
     async () => ({ id: '1', question: '核对结果', answer: '均值为 9。', evidence: [], limitations: [] }))
-  return { ctx, runner, session, settings, state, count: () => count }
+  return { ctx, runner, session, settings, store, state, count: () => count }
 }
 
 test('相同回合并发请求合并，完成报告重用，更改审查项后可重新运行', async () => {
@@ -44,19 +49,19 @@ test('相同回合并发请求合并，完成报告重用，更改审查项后�
   f.runner.start(f.session, '1')
   await tick()
   assert.equal(f.count(), 2)
-  assert.equal(f.session.snapshotEvents().every(e => e.ignorable === true), true)
+  assert.equal(f.session.snapshotEvents().length, 0)
   await f.runner.close()
 })
 
 test('失败报告的请求用量写入会话并可从投影快照恢复，兼容没有用量的旧报告', async () => {
   const f = fixture()
   const usage = { requests: 2, totalTokens: 110 }
-  const runner = createRunner(f.ctx, f.settings, f.state,
+  const runner = createRunner(f.ctx, f.settings, f.state, f.store,
     async () => { throw Object.assign(new Error('审查输出两次未通过校验'), { reviewUsage: usage }) },
     async () => ({ id: '1', limitations: [] }))
   runner.start(f.session, '1')
   await tick()
-  assert.deepEqual(f.session.snapshotEvents().at(-1).data.usage, usage)
+  assert.deepEqual(f.state().reports['1'].usage, usage)
   const saved = projection.stateSchema.parse(JSON.parse(JSON.stringify(f.state())))
   const restored = createRunner(f.ctx, f.settings, () => saved)
   const report = restored.snapshot(f.session).turns[0].review
@@ -83,7 +88,7 @@ test('仅有完成的主会话真人请求可自动启动，手动模式不花�
   await tick()
   assert.equal(f.count(), 1)
   const noHuman = fold(events.filter(e => e.type !== 'user/message'))
-  const isolated = createRunner(f.ctx, f.settings, () => noHuman, () => assert.fail('内部回合不得触发'))
+  const isolated = createRunner(f.ctx, f.settings, () => noHuman, f.store, () => assert.fail('内部回合不得触发'))
   isolated.onTurnEnd(f.session, events.at(-1))
   await tick()
   assert.equal(isolated.snapshot(f.session).turns[0].review, null)
@@ -95,7 +100,7 @@ test('关键轮次记录具体触发依据，普通确认不产生审查报告',
   const f = fixture('key')
   let answer = '收到。'
   let calls = 0
-  const runner = createRunner(f.ctx, f.settings, f.state, async () => { calls++; return result },
+  const runner = createRunner(f.ctx, f.settings, f.state, f.store, async () => { calls++; return result },
     async () => ({ id: '1', number: 1, question: '给出总费用', answer, evidence: [], limitations: [] }))
   runner.start(f.session, '1', true)
   await tick()
@@ -112,7 +117,7 @@ test('关键轮次记录具体触发依据，普通确认不产生审查报告',
 
 test('模式和报告可重放；反馈仅在有真实用户输入时一次性纳入', async () => {
   const f = fixture()
-  appendPluginRecord(f.session, 'plugin:dsh-review/mode', { mode: 'every' })
+  f.runner.setMode(f.session, 'every')
   assert.equal(f.runner.snapshot(f.session).effectiveMode, 'every')
   f.runner.start(f.session, '1')
   await tick()
@@ -127,7 +132,7 @@ test('模式和报告可重放；反馈仅在有真实用户输入时一次性�
   assert.match(feedback.content[0].text, /error/)
   assert.match(feedback.content[0].text, /说明理由/)
   assert.match(feedback.content[0].text, /只按用户已授权的范围行动/)
-  const admitted = projection.apply(state, { type: 'user/message', seq: 99, data: feedback })
+  const admitted = f.store.state(f.session.id, projection.apply(fold(events), { type: 'user/message', seq: 99, data: feedback }))
   assert.equal(withFeedback(admitted, real), real)
   assert.equal(fold(events, events.length).turns.length, 0)
   await f.runner.close()
@@ -237,7 +242,7 @@ test('自动筛选尚未完成时，用户手动要求审查的回合仍执行�
   const f = fixture('key')
   const input = Promise.withResolvers()
   let count = 0
-  const runner = createRunner(f.ctx, f.settings, f.state, async () => { count++; return result }, () => input.promise)
+  const runner = createRunner(f.ctx, f.settings, f.state, f.store, async () => { count++; return result }, () => input.promise)
   runner.start(f.session, '1', true)
   assert.equal(runner.start(f.session, '1').status, 'running')
   input.resolve({ id: '1', answer: '好的。', evidence: [], limitations: [] })
@@ -281,7 +286,7 @@ test('准备证据期间到达的本轮与历史交付物快照都按最新编�
   let projectionState = { ...original, turns: [older, ...original.turns] }
   const input = Promise.withResolvers()
   let observed
-  const runner = createRunner(f.ctx, f.settings, () => projectionState, async ({ turn }) => {
+  const runner = createRunner(f.ctx, f.settings, () => projectionState, f.store, async ({ turn }) => {
     observed = turn
     return result
   }, () => input.promise)
@@ -295,4 +300,28 @@ test('准备证据期间到达的本轮与历史交付物快照都按最新编�
   assert.equal(observed.workspaceSeq, 10)
   assert.equal(observed.previousDelivery.workspaceSeq, 9)
   await runner.close()
+})
+
+test('插件自有存储在重启后区分会话，并在重新审查时使旧反馈回执失效', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-review-store-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'reports.sqlite')
+  let store = openReviewStore(file)
+  const legacy = { mode: 'key', reports: { old: { seq: 8, sent: [0] } }, receipts: {} }
+  const record = { status: 'done', result }
+  store.setMode('session-a', 'every')
+  store.saveReport('session-a', 'turn', record)
+  const revision = store.state('session-a', legacy).reports.turn.seq
+  store.close()
+  store = openReviewStore(file)
+  t.after(() => store.close())
+  const receipt = { ...legacy, receipts: { turn: { revision, indices: [0] } } }
+  assert.deepEqual(store.state('session-a', receipt).reports.turn.sent, [0])
+  assert.equal(store.state('session-a', receipt).mode, 'every')
+  assert.deepEqual(store.state('session-b', legacy).reports, legacy.reports)
+  store.saveReport('session-a', 'turn', record)
+  const updated = store.state('session-a', receipt)
+  assert.notEqual(updated.reports.turn.seq, revision)
+  assert.deepEqual(updated.reports.turn.sent, [])
+  assert.deepEqual(updated.reports.old, legacy.reports.old)
 })

@@ -12,7 +12,10 @@ import { fileURLToPath } from 'node:url'
 import manifest from '../package.json' with { type: 'json' }
 
 const root = fileURLToPath(new URL('../', import.meta.url))
-const cli = fileURLToPath(import.meta.resolve('@deepseek-ai/dsh/lib/bin.js'))
+const defaultCli = fileURLToPath(import.meta.resolve('@deepseek-ai/dsh/lib/bin.js'))
+const targetCli = process.env.DSH_TEST_CLI || defaultCli
+const previousPackage = process.env.DSH_TEST_UPGRADE_FROM
+let cli = previousPackage ? (process.env.DSH_TEST_LEGACY_CLI || defaultCli) : targetCli
 const temp = await mkdtemp(join(tmpdir(), 'dsh-review-test-'))
 const workspace = join(temp, 'workspace')
 const patch = join(temp, 'overlay.yml')
@@ -111,8 +114,9 @@ async function json(path, data) {
     method: data === undefined ? 'GET' : 'POST', headers: { cookie, 'content-type': 'application/json' },
     ...(data === undefined ? {} : { body: JSON.stringify(data) }),
   })
-  assert.equal(response.status, 200, path + ' returned ' + response.status)
-  return response.json()
+  const text = await response.text()
+  assert.equal(response.status, 200, path + ' returned ' + response.status + ': ' + text.slice(0, 350))
+  return JSON.parse(text)
 }
 const plugin = (route, data) => json('/plugins/dsh-review/' + route, data)
 async function rpc(method, request) {
@@ -134,8 +138,11 @@ try {
   ]))
   const target = process.argv[2]
   const packageSpec = target === '--registry' ? manifest.name + '@' + manifest.version : target ? resolve(target) : 'link:' + root
-  const install = launch(['plugin', '--profile', 'web', 'add', packageSpec])
-  assert.equal((await install.ended)[0], 0, install.output)
+  async function installPackage(spec) {
+    const install = launch(['plugin', '--profile', 'web', 'add', spec])
+    assert.equal((await install.ended)[0], 0, install.output)
+  }
+  await installPackage(previousPackage ? resolve(previousPackage) : packageSpec)
   await startHost()
   const global = await plugin('settings')
   assert.equal(global.settings.mode, 'manual')
@@ -177,6 +184,10 @@ try {
   assert.match(JSON.stringify(authorCalls[1].messages), /21 samples.*12 samples/s)
   assert.match(JSON.stringify(reviewerCalls[1].messages), /The total was 12 samples/)
   await stopHost()
+  if (previousPackage) {
+    cli = targetCli
+    await installPackage(packageSpec)
+  }
   await startHost()
   const recovered = await view()
   assert.equal(recovered.mode, 'every')
@@ -184,8 +195,30 @@ try {
   assert.deepEqual(recovered.turns[0].review.result.usage, report.usage)
   assert.equal((await plugin('settings')).settings.model, model)
   assert.equal(reviewerCalls.length, 2)
+  assert.deepEqual(recovered.turns[0].review.feedback, { sent: 1, total: 1 })
+  if (previousPackage) {
+    await ask('Please state the final count again.')
+    await until(async () => (await view()).turns[2]?.review?.result, 'first new report after upgrading')
+    await stopHost()
+    await startHost()
+    const reread = await view()
+    assert.deepEqual(reread.turns[0].review.result, report)
+    assert.equal(reread.turns[0].review.feedback.sent, 1)
+    assert.ok(reread.turns[2].review.result)
+    assert.equal(reviewerCalls.length, 3)
+    console.log('PASS: upgrade retained the original report, feedback receipt and mode alongside the new report.')
+  }
   console.log('PASS: real DSH install, settings, manual and automatic reviews, evidence, feedback, restart.')
 } catch (error) {
+  if (process.env.DSH_TEST_DIAGNOSTICS) {
+    const fs = await import('node:fs/promises')
+    for (const file of await fs.readdir(join(env.DSH_HOME,'logs')).catch(() => [])) {
+      if (/\.log$|\.jsonl$/.test(file)) {
+        const lines = (await fs.readFile(join(env.DSH_HOME,'logs',file),'utf8')).split('\n')
+        console.error(lines.filter(line => /Review route failed|could not|failed to|TypeError|ERR_MODULE/.test(line)).slice(-10).map(line=>line.slice(0,450)).join('\n'))
+      }
+    }
+  }
   if (host) console.error(host.output.replace(/([?&]token=)[^\s]+/gi, '$1[redacted]').slice(-4000))
   throw error
 } finally {
