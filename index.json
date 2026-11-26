@@ -22,6 +22,18 @@
       },
       "versions": [
         {
+          "version": "0.3.1",
+          "publishTimestamp": 1795660793,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/SPYfighting/dsh-science-review",
+            "commit": "080ae50a3cbd62dd866d5287f62bdfc3d49d7734"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.5 <0.2.3-0 || >=0.2.3-alpha.2 <0.2.4-0"
+          }
+        },
+        {
           "version": "0.3.0",
           "publishTimestamp": 1795614700,
           "source": {
