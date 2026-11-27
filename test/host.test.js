@@ -4,6 +4,7 @@ import { setImmediate as tick } from 'node:timers/promises'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { execFileSync } from 'node:child_process'
 import { openReviewStore } from '../lib/review-store.js'
 import { Session } from '@deepseek-ai/dsh-session'
 import { projection, createRunner, withFeedback, registerRoutes, readTurn } from '../lib/index.js'
@@ -324,4 +325,49 @@ test('插件自有存储在重启后区分会话，并在重新审查时使旧�
   assert.notEqual(updated.reports.turn.seq, revision)
   assert.deepEqual(updated.reports.turn.sent, [])
   assert.deepEqual(updated.reports.old, legacy.reports.old)
+})
+
+
+test('宿主进程崩溃后修正记录可恢复，另一个活跃宿主保留其任务', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-review-recovery-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'reports.sqlite')
+  const url = new URL('../lib/review-store.js', import.meta.url).href
+  const job = { id: 'first', phase: 'running', correctionTurn: '2', turnId: '1', revision: 7,
+    dispatchedIndices: [0], steps: [{ status: 'responded' }] }
+  execFileSync(process.execPath, ['--input-type=module', '-e', `
+    const {openReviewStore} = await import(process.argv[1])
+    const store = openReviewStore(process.argv[2])
+    store.saveRemedy('s', JSON.parse(process.argv[3]))
+    store.close()
+  `, url, file, JSON.stringify(job)])
+  const store = openReviewStore(file)
+  t.after(() => store.close())
+  const second = { ...job, id: 'second' }
+  assert.throws(() => store.saveRemedy('s', second), /unique/i)
+  store.interruptRemedies()
+  const [interrupted] = store.remedies('s')
+  assert.equal(interrupted.phase, 'interrupted')
+  assert.equal(interrupted.steps[0].status, 'needs_evidence')
+  const legacy = { mode: 'manual', reports: { '1': { seq: 7, result, sent: [] } } }
+  assert.deepEqual(store.state('s', legacy).reports['1'].sent, [0])
+  store.saveRemedy('s', second)
+  const other = openReviewStore(file)
+  t.after(() => other.close())
+  other.interruptRemedies()
+  assert.equal(other.remedies('s').at(-1).phase, 'running')
+})
+
+test('同一项连续重试后，服务端和报告页面都收到按发起时间排列的处理记录', () => {
+  const store = openReviewStore(':memory:')
+  try {
+    const common = { phase: 'done', action: 'verify', turnId: '1', revision: 7, selectionKey: 'same' }
+    for (const id of ['first', 'second', 'third']) store.saveRemedy('s', { ...common, id })
+    store.saveRemedy('s', { ...common, id: 'first', detail: '补全记录' })
+    assert.equal(store.remedies('s').findLast(j => j.selectionKey === 'same').id, 'third')
+    const state = store.state('s', { mode: 'manual', reports: {} })
+    assert.deepEqual(state.remedyJobs.map(j => j.id), ['first', 'second', 'third'])
+  } finally {
+    store.close()
+  }
 })

@@ -19,6 +19,29 @@ export function reviewLabel(review) {
   if (review.status === 'error') return '审查未完成'
   const result = review.result
   if (!Array.isArray(result?.findings)) return '审查报告'
+  if (result.schemaVersion >= 2) {
+    const labels = result.partial ? ['部分完成'] : []
+    const counted = new Set()
+    let errors = 0, warnings = 0, notes = 0, gaps = 0
+    for (const f of orderedFindings(result.findings)) {
+      const key = f.claim && JSON.stringify([f.claimSource || f.claimLocation, f.claim])
+      if (key && counted.has(key)) continue
+      if (key) counted.add(key)
+      if (f.severity === 'error') errors++
+      else if (f.severity === 'warning') warnings++
+      else notes++
+    }
+    for (const gap of result.gaps || []) {
+      const key = JSON.stringify([gap.claimSource, gap.claim])
+      if (!counted.has(key)) { counted.add(key); gaps++ }
+    }
+    if (errors) labels.push(`${errors} 项实质问题`)
+    if (warnings) labels.push(`${warnings} 项风险待核实`)
+    if (gaps) labels.push(`${gaps} 项关键事实待核实`)
+    if (notes) labels.push(`${notes} 项提示`)
+    if (result.method === 'local' && result.localLabel && !labels.length) return result.localLabel
+    return labels.join(' · ') || '已审查 · 未发现具体问题'
+  }
   const counts = levels.map(level => {
     const count = result.findings.filter(f => f.severity === level).length
     return count ? categories[level] + ' ' + count : null
@@ -46,11 +69,47 @@ export function feedbackLabel(feedback) {
 }
 
 export function usageLabel(usage) {
-  if (!Number.isSafeInteger(usage?.requests) || usage.requests < 1) return ''
+  if (!Number.isSafeInteger(usage?.requests) || usage.requests < 0) return ''
   const calls = `模型请求 ${usage.requests} 次`
   return Number.isSafeInteger(usage.totalTokens) && usage.totalTokens >= 0
     ? calls + ' · 共 ' + usage.totalTokens.toLocaleString('zh-CN') + ' tokens'
     : calls
+}
+
+const usageFields = [
+  ['inputTokens', '未缓存输入'], ['cacheReadTokens', '缓存读取'], ['cacheWriteTokens', '缓存写入'],
+  ['outputTokens', '输出'], ['reasoningTokens', '推理'], ['totalTokens', '总量'],
+]
+export function usageDetails(usage) {
+  return usageFields.map(([key, label]) => ({
+    key, label, value: Number.isSafeInteger(usage?.[key]) && usage[key] >= 0
+      ? usage[key].toLocaleString('zh-CN') : '未提供',
+  }))
+}
+
+export const remedyPhases = {
+  waiting: '等待会话空闲', queued: '已排队', running: '主助手处理中', verifying: '定向复审中',
+  done: '本次处理结束', interrupted: '处理中断', cancelled: '已取消',
+}
+export const remedyOutcomes = {
+  pending: '待处理', responded: '主助手已回应', verified: '修正已核验',
+  inapplicable: '意见不适用', needs_evidence: '仍待核实',
+}
+export function remedyActive(job) {
+  return ['waiting', 'queued', 'running', 'verifying'].includes(job.phase)
+}
+
+export function retryJobId(jobs, kind, index, action, note) {
+  // A retry resumes an identical selection. A new note or subset is a new request.
+  return jobs.findLast(job => !remedyActive(job) && job.action === action && (job.note || '') === note.trim() &&
+    job.steps?.length === 1 && job.steps[0].kind === kind && job.steps[0].index === index)?.id
+}
+
+export function standardsHint(instructions, checks = []) {
+  if (/(?:\bDOI\b|引文|文献标识)/iu.test(instructions) && !checks.includes('citations')) {
+    return '当前核查项未包含“引文与文献标识”。可在设置中勾选。'
+  }
+  return ''
 }
 
 // The Host recognizes the first line on a real user submission. Model-generated

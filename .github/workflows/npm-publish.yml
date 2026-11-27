@@ -59,8 +59,25 @@ jobs:
             200) echo "Checking the integrity of the existing version" ;;
             404)
               npm publish "./$asset" --access public --tag latest --ignore-scripts
-              curl --fail --silent --show-error --retry 5 --retry-all-errors "$url" --output registry.json
+              deadline=$((SECONDS + 480))
+              while true; do
+                status=$(curl --silent --show-error --connect-timeout 5 --max-time 15 \
+                  --output registry.json --write-out '%{http_code}' "$url") || status=000
+                case "$status" in
+                  200) break ;;
+                  000|202|404|408|425|429|5??) ;;
+                  *) echo "Cannot verify $PACKAGE@$VERSION: registry returned HTTP $status" >&2; exit 1 ;;
+                esac
+                if (( SECONDS >= deadline )); then
+                  echo "npm accepted $PACKAGE@$VERSION but the registry did not return the version within 8 minutes (last status: $status)." >&2
+                  exit 1
+                fi
+                sleep 15
+              done
               ;;
             *) echo "npm registry returned HTTP $status" >&2; exit 1 ;;
           esac
-          jq -e --arg integrity "$expected" '.dist.integrity == $integrity' registry.json
+          if ! jq -e --arg integrity "$expected" '.dist.integrity == $integrity' registry.json >/dev/null; then
+            echo "Registry integrity for $PACKAGE@$VERSION does not match the GitHub Release tarball." >&2
+            exit 1
+          fi

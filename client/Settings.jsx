@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { checks, modes, modeHelp, request } from './api.js'
+import { checks, modes, modeHelp, handlingLabels, handlingHelp, request } from './api.js'
+import { standardsHint } from './report.js'
 import { checkPresets, identifyCheckPreset } from '../lib/presets.js'
 import { refreshSessions } from './session.js'
 
@@ -95,6 +96,12 @@ function SettingsForm({ initial, reload }) {
           </select>
         </label>
         <p className="dsr-hint">{modeHelp[draft.mode]}</p>
+        <label className="dsr-row"><span>发现问题后</span>
+          <select value={draft.handling} onChange={e => change({ handling: e.target.value })}>
+            {Object.entries(handlingLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+          </select>
+        </label>
+        <p className="dsr-hint">{handlingHelp[draft.handling]}</p>
         <label className="dsr-row"><span>单轮覆盖度</span>
           <select value={draft.coverage} onChange={e => change({ coverage: e.target.value })}>
             <option value="key">关键主张</option><option value="all">全部可核查主张</option>
@@ -119,8 +126,9 @@ function SettingsForm({ initial, reload }) {
         </label>)}</div>
         {!draft.checks.length && <p className="dsr-error" role="alert">请至少保留一项核查内容。</p>}
       </fieldset>
-      <label className="dsr-stack"><span>补充审查标准 <small>可选</small></span>
+      <label className="dsr-stack"><span>默认补充审查标准 <small>可选</small></span>
         <textarea rows={3} maxLength={2000} value={draft.instructions} placeholder="例如，核对样本量是否与分组统计一致。" onChange={e => change({ instructions: e.target.value })}/>
+        {standardsHint(draft.instructions, draft.checks) && <small>{standardsHint(draft.instructions, draft.checks)}</small>}
       </label>
     </fieldset>
     <div className="dsr-footer"><button type="submit" className="dsr-primary" disabled={!isDirty || !draft.checks.length || state.phase === 'saving'}>{state.phase === 'saving' ? '正在保存…' : '保存设置'}</button>

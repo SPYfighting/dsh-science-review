@@ -114,7 +114,7 @@ test('单条引文失败会点明条目、字段和合法来源，混合报告�
     assert.equal(report.findings[0].quote, '1.20 µM')
     assert.match(report.limitations.join(' '), /未通过校验/)
     assert.equal(report.usage.requests, 2)
-    assert.match(calls[1].system, /findings\[1\] quote.*E5\.text/)
+    assert.match(JSON.parse(calls[1].messages[0].content[0].text).retry.instruction, /findings\[1\] quote.*E5\.text/)
     assert.doesNotMatch(calls[1].system, /SHOULD_NEVER_ENTER_SYSTEM/u)
   }
 })
@@ -256,8 +256,11 @@ test('逐条检查遗漏触发一次补审，合并已定位的问题和段落�
   const { ctx, calls } = context([{ ...empty, findings: [finding] }, { ...empty, reviewed: ['A2'] }])
   const report = await reviewTurn({ ctx, session, turn: { ...target, answer: target.answer + '\n第二段。' }, settings })
   assert.equal(calls.length, 2)
-  assert.equal(calls[0].messages[0].content[0].text, calls[1].messages[0].content[0].text)
-  assert.match(calls[1].system, /仅补审 A2/)
+  assert.equal(calls[0].system, calls[1].system)
+  const { retry, ...secondPayload } = JSON.parse(calls[1].messages[0].content[0].text)
+  assert.deepEqual(JSON.parse(calls[0].messages[0].content[0].text), secondPayload)
+  assert.deepEqual(retry.targetIds, ['A2'])
+  assert.match(retry.instruction, /仅补审 A2/)
   assert.equal(report.findings[0].claim, '2.20 µM')
   assert.equal(report.coverage.reviewed, 2)
   assert.ok(report.limitations.every(line => !line.startsWith('逐条审查未覆盖 ')))
@@ -302,27 +305,36 @@ test('用量按实际请求汇总终止时的完整计数，不重复计算缓�
     const { ctx } = context(streams)
     return reviewTurn({ ctx, session, turn, settings })
   }
-  assert.deepEqual((await run([reply(empty, usage(20), usage(40))])).usage, { requests: 1, totalTokens: 40 })
-  assert.deepEqual((await run([reply('bad', usage(40)), reply(empty, usage(70))])).usage, { requests: 2, totalTokens: 110 })
+  const aggregated = (counts, total) => ({ requests: counts.length,
+    stages: counts.map((value, i) => ({ stage: i ? 'retry' : 'initial', ...(value === 'unfinished' ? {} : {
+      inputTokens: 15, outputTokens: 20, cacheReadTokens: 5, reasoningTokens: 10,
+      ...(Number.isSafeInteger(value) && value >= 0 ? { totalTokens: value } : {}),
+    }) })),
+    ...(!counts.includes('unfinished') ? { inputTokens: 15 * counts.length, outputTokens: 20 * counts.length,
+      cacheReadTokens: 5 * counts.length, reasoningTokens: 10 * counts.length } : {}),
+    ...(total === undefined ? {} : { totalTokens: total }),
+  })
+  assert.deepEqual((await run([reply(empty, usage(20), usage(40))])).usage, aggregated([40], 40))
+  assert.deepEqual((await run([reply('bad', usage(40)), reply(empty, usage(70))])).usage, aggregated([40, 70], 110))
   await assert.rejects(run([reply('bad', usage(40)), reply('still bad', usage(70))]), error => {
     assert.match(error.message, /两次未通过校验/)
-    assert.deepEqual(error.reviewUsage, { requests: 2, totalTokens: 110 })
+    assert.deepEqual(error.reviewUsage, aggregated([40, 70], 110))
     return true
   })
   await assert.rejects(run([[usage(40)]]), error => {
     assert.match(error.message, /响应中断/)
-    assert.deepEqual(error.reviewUsage, { requests: 1 })
+    assert.deepEqual(error.reviewUsage, aggregated(['unfinished']))
     return true
   })
   for (const total of [undefined, null, -1, 0.5]) {
-    assert.deepEqual((await run([reply('bad', usage(total)), reply(empty, usage(70))])).usage, { requests: 2 })
+    assert.deepEqual((await run([reply('bad', usage(total)), reply(empty, usage(70))])).usage, aggregated([total, 70]))
   }
   const extended = { ...target, answer: target.answer + '\n第二段。' }
   const truncated = [usage(30), { type: 'finish', reason: { kind: 'max-tokens' } }]
   const partial = await run([reply(empty, usage(40)), truncated], extended)
-  assert.deepEqual(partial.usage, { requests: 2, totalTokens: 70 })
+  assert.deepEqual(partial.usage, aggregated([40, 30], 70))
   assert.equal(partial.coverage.reviewed, 1)
-  assert.deepEqual((await run([reply(empty, usage(40)), [usage(30)]], extended)).usage, { requests: 2 })
+  assert.deepEqual((await run([reply(empty, usage(40)), [usage(30)]], extended)).usage, aggregated([40, 'unfinished']))
   const { ctx } = context([reply(empty, usage(40))])
   const prepare = ctx.llm.prepareCall
   let prepared = 0
@@ -331,7 +343,7 @@ test('用量按实际请求汇总终止时的完整计数，不重复计算缓�
     return prepare(...args)
   }
   const serviceFailure = await reviewTurn({ ctx, session, turn: extended, settings })
-  assert.deepEqual(serviceFailure.usage, { requests: 1, totalTokens: 40 })
+  assert.deepEqual(serviceFailure.usage, aggregated([40], 40))
 })
 
 test('收到错误类型或取消时保留模型诊断，尚未发起请求的错误没有用量', async () => {
@@ -341,7 +353,7 @@ test('收到错误类型或取消时保留模型诊断，尚未发起请求的�
   ctx.llm.prepareCall = async () => ({ config: {}, stream() { controller.abort(reason); throw reason } })
   await assert.rejects(reviewTurn({ ctx, session, turn: target, settings, signal: controller.signal }), error => {
     assert.equal(error, reason)
-    assert.deepEqual(error.reviewUsage, { requests: 1 })
+    assert.deepEqual(error.reviewUsage, { requests: 1, stages: [{ stage: 'initial' }] })
     return true
   })
   const unavailable = Object.freeze(Object.assign(new Error('model unavailable'), { code: 'OFFLINE' }))
@@ -350,7 +362,7 @@ test('收到错误类型或取消时保留模型诊断，尚未发起请求的�
     assert.equal(error.cause, unavailable)
     assert.equal(error.message, unavailable.message)
     assert.equal(error.code, 'OFFLINE')
-    assert.deepEqual(error.reviewUsage, { requests: 1 })
+    assert.deepEqual(error.reviewUsage, { requests: 1, stages: [{ stage: 'initial' }] })
     return true
   })
   ctx.llm.prepareCall = async () => { throw unavailable }
@@ -491,4 +503,110 @@ test('修改写作严重度不掩盖影响使用的实质缺失或明确硬性�
   const f = context([{ ...empty, findings: raw }])
   const report = await reviewTurn({ ctx: f.ctx, session, turn, settings: { ...settings, checks: ['writing'] } })
   assert.deepEqual(report.findings.map(i => [i.writingKind, i.severity]), [['incomplete', 'error'], ['requirement', 'error']])
+})
+
+test('原轮次时间与消息来源本地核对短问；不按复查时间、审查模型或缺失时区猜测', async () => {
+  const when = Date.UTC(2026, 10, 25, 17)
+  const timezone = 'Asia/Shanghai'
+  function observation(question, value, overrides = {}) {
+    const message = user(question)
+    message.data.source.clientTimeZone = timezone
+    const [t] = listTurns(withSeq([start(12), message, answer(12, value), end(12)]).map(e => ({ ...e, time: when })))
+    return { ...t, ...overrides }
+  }
+  const options = { ...settings, instructions: '', checks: ['numbers', 'execution'] }
+  async function run(turn) {
+    const fake = context([empty])
+    const r = await reviewTurn({ ctx: fake.ctx, session, turn, settings: options })
+    assert.equal(fake.calls.length, 0)
+    assert.equal(r.method, 'local')
+    assert.equal(r.usage.requests, 0)
+    return r
+  }
+  const date = observation('今天是几月几日', '今天是 2026 年 11 月 26 日。')
+  assert.equal((await run(date)).localLabel, '日期已核对')
+  assert.equal((await run({ ...date, answer: '2026-11-25' })).findings[0].repair.to, '2026-11-26')
+  assert.equal((await run({ ...date, clientTimeZone: undefined })).gaps.length, 1)
+  assert.equal((await run({ ...date, answerTime: when + 86400000 })).gaps.length, 1)
+  const model = observation('你是什么模型', '我当前使用的模型是 lab/model。DeepSeek Harness 是运行这个模型的工具平台，不是模型名称。')
+  assert.equal((await run(model)).localLabel, '与本轮模型记录一致')
+  assert.equal((await run({ ...model, messageRoute: undefined })).gaps.length, 1)
+  assert.equal((await run({ ...model, answer: '我当前使用的模型是 wrong/model。' })).findings[0].repair.to, 'lab/model')
+  for (const [t, change] of [[{ ...date, question: '今天几号、与会议相隔几天？' }, {}], [date, { sessionInstructions: '核对字数' }],
+    [{ ...model, answer: model.answer + '支持 2M 上下文。' }, {}]]) {
+    const f = context([empty]); await reviewTurn({ ctx: f.ctx, session, turn: t, settings: { ...options, ...change } })
+    assert.equal(f.calls.length, 1)
+    assert.ok(JSON.parse(f.calls[0].messages[0].content[0].text).evidence.some(r => /^H[12]$/u.test(r.id)))
+  }
+})
+
+test('系统范围与可逐字定位的缺证分开，实际漏审独立标记为部分完成', async () => {
+  const gap = { claimSource: 'A1', claim: '均值', missing: '缺少 batch-A.csv 的原始数值。', impact: '无法核验最终汇总。' }
+  const f = context([{ reviewed: ['A1'], findings: [], gaps: [gap] }])
+  const res = await reviewTurn({ ctx: f.ctx, session, turn: { ...target, limitations: ['仅选入部分此前记录，未检索全部历史。'] }, settings })
+  assert.equal(res.partial, false)
+  assert.deepEqual(res.gaps, [gap])
+  assert.deepEqual(res.scopeNotes, ['仅选入部分此前记录，未检索全部历史。'])
+  const bad = { reviewed: ['A1'], findings: [], gaps: [{ ...gap, claim: 'different source' }] }
+  const invalid = context([bad, bad])
+  await assert.rejects(reviewTurn({ ctx: invalid.ctx, session, turn: target, settings }), /未通过校验/)
+  const truncated = context([empty, empty])
+  assert.equal((await reviewTurn({ ctx: truncated.ctx, session, turn: { ...target, answer: '一段\n二段' }, settings })).partial, true)
+})
+
+test('精确索引只传回同会话提供的原文，修正用量与稳定前缀可区分', async () => {
+  const { indexedEvidence, evidenceTerms } = await import('../lib/evidence-index.js')
+  const row = { id: 'E7', seq: 7, turn: 1, kind: '工具结果', text: 'read [1] 返回\n样本量：6', path: 'samples-A.tsv' }
+  const entries = indexedEvidence({ number: 1, evidence: [row, { ...row, id: 'E8', kind: '助手先前陈述' }] })
+  assert.equal(entries.length, 1)
+  assert.ok(entries[0].terms.includes('samples-A.tsv'))
+  assert.deepEqual(evidenceTerms('按第 1 轮 samples-A.tsv 核对 PMID 41231234'), ['turn:1','samples-A.tsv','pmid:41231234'])
+  assert.deepEqual(evidenceTerms('read /work/data/samples-A.tsv [paper](https://doi.org/10.1234/A(B))'), ['/work/data/samples-A.tsv','samples-A.tsv','10.1234/a(b)'])
+  const t = { ...target, number: 32, indexedEvidence: [row], evidence: [], question: '核对第 1 轮 samples-A.tsv 的样本量' }
+  const f = context([empty])
+  await reviewTurn({ ctx: f.ctx, session, turn: t, settings })
+  const data = JSON.parse(f.calls[0].messages[0].content[0].text)
+  assert.equal(data.evidence[0].text, row.text)
+  assert.equal(data.evidence[0].turn, 1)
+  assert.deepEqual(Object.keys(data).slice(0,4), ['checks','coverage','focus','targetTurn'])
+})
+
+test('同批次、同指标和单位的独立唯一读数才允许机械修正，模型不能伪造资格', async () => {
+  const expected = '批次A 独立样本数：6'
+  const wrong = '批次A 独立样本数：12'
+  const row = { id: 'E17', seq: 17, turn: 1, kind: '工具结果', text: 'read [c9] 返回\n' + expected, path: 'batches.tsv' }
+  async function issue(source, extra = [], answerText = wrong, ref = row, limitations = []) {
+    const item = { ...finding, source: ref.id, quote: source, claim: answerText, repair: { kind: 'number', to: '900' } }
+    const f = context([{ ...empty, findings: [item] }])
+    const r = await reviewTurn({ ctx: f.ctx, session, turn: { ...target, answer: answerText, evidence: [ref, ...extra], limitations }, settings })
+    return r.findings[0]
+  }
+  assert.equal((await issue(expected)).repair.to, expected)
+  assert.equal((await issue(expected)).repair.from, wrong)
+  assert.equal((await issue(expected, [], wrong, { ...row, turn: 0 })).repair, undefined)
+  assert.equal((await issue(expected, [], '批次B 独立样本数：12')).repair, undefined)
+  assert.equal((await issue(expected, [], wrong, { ...row, path: undefined })).repair, undefined)
+  assert.equal((await issue(expected, [{ ...row, id: 'E19', text: row.text.replace('：6','：8') }])).repair, undefined)
+  const prefix = 'read [c9] 返回\n<path>/project/batches.tsv</path>\n<type>file</type>\n<content>\n'
+  const native = { ...row, text: prefix + '1: ' + expected + '\n\n(End of file - total 1 lines)\n</content>' }
+  assert.equal((await issue('1: ' + expected, [], wrong, native)).repair.to, expected)
+  const single = { ...row, text: native.text.replace(expected, '样本量：6') }
+  assert.equal((await issue('样本量：6', [], '样本量：12', single)).repair.to, '样本量：6')
+  const partial = native.text.replace('(End of file - total 1 lines)', '(Showing lines 1-1 of 2. Use offset=2 to continue.)')
+  assert.equal((await issue(expected, [], wrong, { ...row, text: partial })).repair, undefined)
+  assert.equal((await issue(expected, [], wrong, { ...row, text: native.text.replace('1: ', '3: ') })).repair, undefined)
+  const fragment = { id:'F17.0', seq:17, turn:1, kind:'交付文件结束版本快照', text:'L21 | ' + expected, file:'batches.tsv' }
+  assert.equal((await issue(expected, [], wrong, fragment, ['batches.tsv 只提供改动段及其上下文，未核对文件中其余行。'])).repair, undefined)
+})
+
+test('长答案按遗漏项定向补审，修订指令放在稳定 system 和已选规则之后', async () => {
+  const turn = { ...target, answer: '第一段' + '长'.repeat(1300) + '\n第二段', question: '逐段核对。' }
+  const f = context([{ ...empty }, { ...empty, reviewed: ['A2'] }])
+  const r = await reviewTurn({ ctx: f.ctx, session, turn, settings })
+  assert.deepEqual(r.coverage, { mode: 'all', reviewed: 2, available: 2 })
+  assert.equal(r.partial, false)
+  assert.equal(f.calls[0].system, f.calls[1].system)
+  const retry = JSON.parse(f.calls[1].messages[0].content[0].text)
+  assert.deepEqual(retry.answer, [{ id:'A2', text:'第二段' }])
+  assert.deepEqual(Object.keys(retry).at(-1), 'retry')
 })

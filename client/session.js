@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { request } from './api.js'
+import { remedyActive } from './report.js'
 
 const stores = new Map()
 export function refreshSessions() { for (const store of stores.values()) store.refresh() }
@@ -30,7 +31,7 @@ function sessionStore(sessionId) {
       const data = await request('session', { query: { sessionId }, signal: read.signal })
       if (!read.signal.aborted) {
         publish({ data, error: '' })
-        if (data.turns.some(turn => turn.review?.status === 'running')) later(1400)
+        if (data.turns.some(turn => turn.review?.status === 'running' || turn.review?.remediation?.some(remedyActive))) later(1400)
         else if (waitForTurn && retries > 0 && (!state.byTurn.has(waitForTurn) ||
           (data.effectiveMode !== 'manual' && !state.byTurn.get(waitForTurn).review))) {
           retries--
@@ -57,8 +58,10 @@ function sessionStore(sessionId) {
       const res = await request(route, { body: { sessionId, ...body } })
       if (route === 'session') publish({ data: res })
       await refresh()
+      return true
     } catch (error) {
       publish({ error: error.message })
+      return false
     } finally { publish({ busy: false }) }
   }
   return {
@@ -88,6 +91,8 @@ function sessionStore(sessionId) {
       }
     },
     setMode: mode => mutate('session', { mode }),
+    setOptions: patch => mutate('session', patch),
+    remedy: body => mutate('remedy', body),
     run: turnId => mutate('run', { turnId }),
   }
 }

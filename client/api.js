@@ -17,6 +17,12 @@ export async function request(route, { query, body, signal } = {}) {
 }
 
 export const modes = { manual: '仅手动', key: '关键轮次', every: '每一轮' }
+export const handlingLabels = { manual: '手动启动', conditional: '分情况处理', auto: '自动核实与修正' }
+export const handlingHelp = {
+  manual: '点击报告中的按钮启动主助手。',
+  conditional: '证据能确定改法时自动修正并复审，其余事项由你选择。',
+  auto: '主助手可先用已有证据核实疑点，再修正并复审。需要补充材料时会等你处理。',
+}
 export { checkLabels as checks } from '../lib/presets.js'
 
 export const modeHelp = {

@@ -1,0 +1,153 @@
+{
+  "date": "2026-11-27",
+  "host": "DSH 0.2.2-rc.5",
+  "provider": "deepseek-account",
+  "model": "deepseek-flash",
+  "effort": "high",
+  "coverage": "all",
+  "method": "同一模型和推理强度，先运行发布版 0.3.1，再运行 0.4.0 候选。复用 test/live-account.mjs 的 research、code 两个虚构案例，每种组合一次。每个数字来自提供方的用量回报。",
+  "scenarios": [
+    {
+      "case": "research",
+      "checks": [
+        "numbers",
+        "methods",
+        "execution"
+      ],
+      "input": {
+        "question": "每组3个独立样本，每个样本检测2次，两组共12次读数。没有做显著性检验。请报告独立样本数，只描述现有结果。",
+        "answer": "两组共12个独立样本。\n处理组显著高于对照组（p=0.013）。"
+      },
+      "expected": "区分6个独立样本与12次读数，发现没有依据的显著性及 p 值。",
+      "runs": [
+        {
+          "version": "0.3.1",
+          "requestedAt": "2026-11-27T09:04:20.635Z",
+          "calls": [
+            {
+              "inputTokens": 353,
+              "outputTokens": 2507,
+              "cacheReadTokens": 256,
+              "cacheWriteTokens": 0,
+              "totalTokens": 3116
+            }
+          ],
+          "findings": [
+            {
+              "check": "numbers",
+              "severity": "error",
+              "claim": "两组共12个独立样本。"
+            },
+            {
+              "check": "methods",
+              "severity": "error",
+              "claim": "处理组显著高于对照组（p=0.013）。"
+            },
+            {
+              "check": "numbers",
+              "severity": "error",
+              "claim": "p=0.013"
+            }
+          ]
+        },
+        {
+          "version": "0.4.0",
+          "requestedAt": "2026-11-27T09:05:49.452Z",
+          "calls": [
+            {
+              "inputTokens": 687,
+              "outputTokens": 1101,
+              "cacheReadTokens": 0,
+              "cacheWriteTokens": 0,
+              "totalTokens": 1788
+            }
+          ],
+          "findings": [
+            {
+              "check": "numbers",
+              "severity": "error",
+              "claim": "两组共12个独立样本。"
+            },
+            {
+              "check": "methods",
+              "severity": "error",
+              "claim": "处理组显著高于对照组（p=0.013）。"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "case": "code",
+      "checks": [
+        "code",
+        "execution"
+      ],
+      "input": {
+        "question": "请审查 mean 的空输入行为。验收约定是空数组返回 0，不能返回 NaN。请告知此版本能否发布。",
+        "answer": "空数组会返回 0；边界测试通过，可以发布。",
+        "tool": {
+          "name": "run_code",
+          "args": {
+            "code": "const mean = xs => xs.reduce((a,b) => a+b, 0) / xs.length; console.log(mean([]))"
+          },
+          "result": "NaN"
+        }
+      },
+      "expected": "指出空数组产生 NaN，发布与测试通过的结论缺少成立条件。",
+      "runs": [
+        {
+          "version": "0.3.1",
+          "requestedAt": "2026-11-27T09:04:39.274Z",
+          "calls": [
+            {
+              "inputTokens": 445,
+              "outputTokens": 634,
+              "cacheReadTokens": 256,
+              "cacheWriteTokens": 0,
+              "totalTokens": 1335
+            }
+          ],
+          "findings": [
+            {
+              "check": "code",
+              "severity": "error",
+              "claim": "空数组会返回 0"
+            },
+            {
+              "check": "execution",
+              "severity": "error",
+              "claim": "边界测试通过，可以发布"
+            }
+          ]
+        },
+        {
+          "version": "0.4.0",
+          "requestedAt": "2026-11-27T09:05:58.770Z",
+          "calls": [
+            {
+              "inputTokens": 395,
+              "outputTokens": 1937,
+              "cacheReadTokens": 384,
+              "cacheWriteTokens": 0,
+              "totalTokens": 2716
+            }
+          ],
+          "findings": [
+            {
+              "check": "code",
+              "severity": "error",
+              "claim": "空数组会返回 0"
+            },
+            {
+              "check": "execution",
+              "severity": "error",
+              "claim": "边界测试通过，可以发布"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "interpretation": "两版均检出样本数与显著性推断错误、空输入实际行为与测试声明矛盾。研究案例对显著性和 p 值的分项方式略有差异。两例合计由 4451 变为 4504 token；不应据此推算节省比例、费用或其他模型的缓存命中。"
+}

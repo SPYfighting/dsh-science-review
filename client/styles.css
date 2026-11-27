@@ -92,3 +92,15 @@
 .dsr-followup > p { color: var(--dsw-alias-label-secondary, GrayText); font-size: 12px; }
 .dsr-secondary { padding: 4px 10px; border: 1px solid var(--dsw-alias-border-l3, ButtonBorder); border-radius: 7px; color: inherit; background: var(--dsw-alias-bg-layer-1, Canvas); }
 @media (pointer: coarse) { .dsr-trigger { min-width: 36px; min-height: 36px; } .dsr-mode-picker label > span, .dsr-secondary { min-height: 40px; } }
+.dsr-disclosure { min-width: 0; }
+.dsr-disclosure summary { cursor: pointer; color: var(--dsw-alias-label-secondary, GrayText); }
+.dsr-disclosure[open] > :not(summary) { margin-top: 7px; }
+.dsr-disclosure ul, .dsr-remedy ul { padding-inline-start: 1.4em; margin-block: 4px; }
+.dsr-criteria { white-space: pre-wrap; }
+.dsr-finding > button, .dsr-finding > small[role="status"] { display: inline-block; margin-top: 7px; }
+.dsr-remedies { display: grid; gap: 8px; }
+.dsr-remedy { padding: 8px 10px; border-inline-start: 2px solid var(--dsw-alias-link, #355ab2); }
+.dsr-usage { display: grid; grid-template-columns: repeat(auto-fit, minmax(95px, 1fr)); gap: 4px 10px; }
+.dsr-usage dt { font-size: 12px; color: var(--dsw-alias-label-secondary, GrayText); }
+.dsr-usage dd { font-variant-numeric: tabular-nums; }
+.dsr-disclosure .dsr-model-note { margin-inline-start: 6px; }

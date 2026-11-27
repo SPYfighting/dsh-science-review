@@ -1,78 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { checks, modes, modeHelp } from './api.js'
-import { evidenceParts, feedbackLabel, orderedFindings, reviewLabel, usageLabel, visibleMode } from './report.js'
+import { checks, modes, modeHelp, handlingLabels, handlingHelp } from './api.js'
+import { reviewLabel, visibleMode, remedyActive, standardsHint } from './report.js'
 import { useReviewSession, useTurnArrival } from './session.js'
-
-const severityLabels = { error: '实质问题', warning: '待核实', note: '提示' }
-
-function sourceLabel(location) {
-  const id = location?.split(' · ', 1)[0]
-  if (id === 'Q') return '本轮用户要求 · ' + location
-  if (/^A\d+$/.test(id)) return '回答第 ' + id.slice(1) + ' 段 · ' + location
-  if (/^U\d+$/.test(id)) return '此前用户要求 · ' + location
-  if (/^E\d+$/.test(id)) return '会话记录 · ' + location
-  if (/^F\d+\.\d+$/.test(id)) return '文件快照 · ' + location
-  return location
-}
-
-function Finding({ finding }) {
-  const evidence = evidenceParts(finding)
-  return <article className="dsr-finding" data-severity={finding.severity}>
-    <header><b>{severityLabels[finding.severity] || '发现'}</b><span>{checks[finding.check]}</span></header>
-    <p className="dsr-claim">{finding.claim}</p>
-    {finding.claimLocation && <small className="dsr-location">{sourceLabel(finding.claimLocation)}</small>}
-    <dl>
-      {evidence.quote && <div><dt>对照证据</dt><dd>
-        {evidence.location && <small className="dsr-location">{sourceLabel(evidence.location)}</small>}{evidence.quote}
-      </dd></div>}
-      {finding.reason && <div><dt>判断依据</dt><dd>{finding.reason}</dd></div>}
-      {finding.suggestion && <div><dt>建议</dt><dd>{finding.suggestion}</dd></div>}
-    </dl>
-  </article>
-}
-
-function ReviewReport({ review, sessionId, turnId, addDraft, onDraft }) {
-  const [all, setAll] = useState(false)
-  const [draftStatus, setDraftStatus] = useState(null)
-  const result = review.result
-  if (review.status === 'running') return <p role="status" className="dsr-hint">正在核对这轮回答…</p>
-  if (review.status === 'error') {
-    const usage = usageLabel(review.usage)
-    return <div className="dsr-report">
-      <p role="alert" className="dsr-error">{review.error || '本轮审查未完成。'}</p>
-      {usage && <small className="dsr-model-note">{usage}</small>}
-    </div>
-  }
-  if (!result) return <p className="dsr-hint">未收到审查报告。</p>
-  const model = result.model || {}
-  const usage = usageLabel(result.usage)
-  const findings = orderedFindings(result.findings)
-  function draft() {
-    try {
-      addDraft(sessionId, turnId)
-      setDraftStatus({ message: '请求已放入输入框，可编辑后发送。' })
-      onDraft?.()
-    } catch (error) {
-      setDraftStatus({ error: true, message: error.message || '无法写入当前会话草稿。' })
-    }
-  }
-  return <div className="dsr-report">
-    {result.summary && <p>{result.summary}</p>}
-    {review.trigger?.reason && <p className="dsr-hint">审查缘由 · {review.trigger.reason}</p>}
-    {(all ? findings : findings.slice(0, 3)).map((finding, i) => <Finding key={i} finding={finding}/>)}
-    {findings.length > 3 && <button type="button" className="dsr-link dsr-disclose" aria-expanded={all}
-      onClick={() => setAll(!all)}>{all ? '收起其余问题' : `查看其余 ${findings.length - 3} 项`}</button>}
-    {result.limitations?.length > 0 && <div className="dsr-limit"><strong>核查限制</strong><ul>
-      {result.limitations.map((line, i) => <li key={i}>{line}</li>)}</ul></div>}
-    {(model.model || usage) && <small className="dsr-model-note">{[model.provider, model.model, model.effort, usage].filter(Boolean).join(' · ')}</small>}
-    {findings.length > 0 && <div className="dsr-followup">
-      <p>{feedbackLabel(review.feedback)}</p>
-      <button type="button" className="dsr-secondary" onClick={draft}>起草复核请求</button>
-      {draftStatus && <p role={draftStatus.error ? 'alert' : 'status'} className={draftStatus.error ? 'dsr-error' : 'dsr-hint'}>{draftStatus.message}</p>}
-    </div>}
-  </div>
-}
+import { ReviewReport } from './ReviewReport.jsx'
 
 export function TurnReview({ sessionId, turn, addDraft }) {
   const [state, store] = useReviewSession(sessionId)
@@ -82,7 +13,7 @@ export function TurnReview({ sessionId, turn, addDraft }) {
   if (!review) return null
   return <details className="dsr dsr-turn" data-state={review.status}>
     <summary>{reviewLabel(review)}</summary>
-    <ReviewReport key={review.updatedAt} {...{ review, sessionId, turnId, addDraft }}/>
+    <ReviewReport key={review.updatedAt} {...{ review, sessionId, turnId, addDraft, store }} busy={state.busy}/>
     {review.status === 'error' && <button type="button" className="dsr-link" disabled={state.busy} onClick={() => store.run(turnId)}>重试本轮审查</button>}
     {state.error && <p className="dsr-error" role="alert">{state.error}</p>}
   </details>
@@ -166,15 +97,16 @@ function SessionControl({ sessionId, addDraft }) {
   const close = restore => { setOpen(false); if (restore) anchor.current?.focus() }
   const latestReview = turns.findLast(turn => turn.review)?.review
   const running = turns.some(turn => turn.review?.status === 'running')
+  const handling = turns.some(turn => turn.review?.remediation?.some(remedyActive))
   const error = Boolean(state.error || latestReview?.status === 'error')
   const mode = visibleMode(data, state.error)
-  const status = state.error ? '审查服务异常' : running ? '正在审查' : error ? '最近一次审查失败' : ''
+  const status = state.error ? '审查服务异常' : running ? '正在审查' : handling ? '正在处理审查意见' : error ? '最近一次审查失败' : ''
   const description = ['会话审查', modes[mode] || (state.error ? '模式未知' : '正在读取模式'), status].filter(Boolean).join(' · ')
   return <>
     <button type="button" ref={anchor} className="dsr dsr-trigger" data-mode={mode} aria-label={description} title={description}
       aria-haspopup="dialog" aria-expanded={open} onClick={() => { if (!open) void store.refresh(); setOpen(!open) }}>
       <ModeIcon mode={mode}/>
-      {running && !state.error ? <i className="dsr-activity dsr-activity-running" aria-hidden="true"/> :
+      {(running || handling) && !state.error ? <i className="dsr-activity dsr-activity-running" aria-hidden="true"/> :
         error ? <i className="dsr-activity dsr-activity-error" aria-hidden="true">!</i> : null}
     </button>
     {open && <SessionMenu anchor={anchor} close={close} titleId={titleId}>
@@ -190,6 +122,7 @@ function SessionControl({ sessionId, addDraft }) {
             </label>)}</div>
           {modes[mode] && <p className="dsr-hint">{data.mode === 'inherit' ? modes[mode] + ' · ' : ''}{modeHelp[mode]}</p>}
         </fieldset>
+        <SessionOptions data={data} store={store} busy={state.busy}/>
         {turns.length ? <>
           <label className="dsr-stack"><span>审查对象</span>
             <select value={selected} disabled={state.busy} onChange={e => { setSelected(e.target.value); setShowReport(false) }}>
@@ -200,10 +133,39 @@ function SessionControl({ sessionId, addDraft }) {
           <div className="dsr-footer"><button type="button" className="dsr-primary" disabled={state.busy || !selectedTurn || report?.status === 'running'}
             onClick={() => { setShowReport(true); void store.run(selectedTurn.id) }}>{report?.status === 'running' ? '正在审查…' : '审查此轮'}</button>
             {report && <button type="button" className="dsr-link" onClick={() => setShowReport(!showReport)}>{showReport ? '收起报告' : '查看报告'}</button>}</div>
-          {showReport && report && <ReviewReport key={selectedTurn.id + '/' + report.updatedAt} review={report} sessionId={sessionId} turnId={selectedTurn.id} addDraft={addDraft} onDraft={() => close(false)}/>}
+          {showReport && report && <ReviewReport key={selectedTurn.id + '/' + report.updatedAt} review={report} sessionId={sessionId} turnId={selectedTurn.id} addDraft={addDraft} store={store} busy={state.busy} onDraft={() => close(false)}/>}
         </> : <p className="dsr-hint">第一轮回答完成后即可审查。</p>}
       </>}
     </SessionMenu>}
+  </>
+}
+
+function SessionOptions({ data, store, busy }) {
+  const saved = data.sessionInstructions || ''
+  const [edited, setEdited] = useState(null)
+  const [savedMessage, setSavedMessage] = useState('')
+  const draft = edited ?? saved
+  const hint = standardsHint(draft, data.checks)
+  return <>
+    <label className="dsr-stack"><span>发现问题后</span>
+      <select value={data.handling || 'inherit'} disabled={busy} onChange={e => store.setOptions({ handling: e.target.value })}>
+        <option value="inherit">跟随全局 · {handlingLabels[data.effectiveHandling] || handlingLabels.manual}</option>
+        {Object.entries(handlingLabels).map(([id, label]) => <option key={id} value={id}>{label}</option>)}
+      </select>
+    </label>
+    <p className="dsr-hint">{handlingHelp[data.effectiveHandling]}</p>
+    <details className="dsr-disclosure"><summary>审查标准{saved && ' · 本会话已追加'}</summary>
+      {data.checks?.length > 0 && <p className="dsr-hint">核查项 · {data.checks.map(id => checks[id]).join('、')}</p>}
+      {data.globalInstructions && <p className="dsr-criteria"><strong>默认标准</strong> {data.globalInstructions}</p>}
+      <label className="dsr-stack"><span>本会话追加标准</span>
+        <textarea rows={3} maxLength={2000} disabled={busy} value={draft} onChange={e => { setEdited(e.target.value); setSavedMessage('') }}
+          placeholder="例如，两批独立采样合并分析时，请核对批次效应。"/>
+      </label>
+      {hint && <small>{hint}</small>}
+      <div className="dsr-footer"><button type="button" className="dsr-secondary" disabled={busy || draft === saved}
+        onClick={async () => { if (await store.setOptions({ sessionInstructions: draft })) { setEdited(null); setSavedMessage('已保存') } }}>保存会话标准</button>
+        {savedMessage && <small role="status">{savedMessage}</small>}</div>
+    </details>
   </>
 }
 

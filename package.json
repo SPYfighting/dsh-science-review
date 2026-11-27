@@ -1,6 +1,6 @@
 {
   "name": "dsh-science-review",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "核对 DeepSeek Harness 会话回答与执行记录的独立审查插件",
   "author": "SPYfighting",
   "license": "MIT",
